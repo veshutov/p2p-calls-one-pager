@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebRTC Video Call - No Signaling Server</title>
+    <title>WebRTC Video Call</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -51,6 +51,8 @@
             border-radius: 5px;
             font-family: monospace;
             resize: vertical;
+            word-wrap: break-word;
+            word-break: break-all;
         }
         button {
             background: #007bff;
@@ -102,16 +104,24 @@
             margin-top: 0;
             color: #007bff;
         }
+        .compression-info {
+            font-size: 12px;
+            color: #666;
+            text-align: center;
+            margin-top: 5px;
+        }
         @media (max-width: 768px) {
             .video-container {
                 grid-template-columns: 1fr;
             }
         }
     </style>
+    <!-- Include pako for compression -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
 </head>
 <body>
     <div class="container">
-        <h1>🎥 WebRTC Video Call (No Signaling Server)</h1>
+        <h1>🎥 WebRTC Video Call</h1>
         
         <div class="status info" id="status">Ready to start a call</div>
 
@@ -136,6 +146,7 @@
             <div class="step">
                 <h3>Step 1: Copy your offer and send it to the other person</h3>
                 <textarea id="localOffer" readonly placeholder="Your offer will appear here"></textarea>
+                <div class="compression-info" id="offerCompressionInfo"></div>
                 <button onclick="copyToClipboard('localOffer')">Copy Offer</button>
             </div>
 
@@ -156,6 +167,7 @@
             <div class="step">
                 <h3>Step 2: Copy your answer and send it back</h3>
                 <textarea id="localAnswer" readonly placeholder="Your answer will appear here"></textarea>
+                <div class="compression-info" id="answerCompressionInfo"></div>
                 <button onclick="copyToClipboard('localAnswer')">Copy Answer</button>
             </div>
         </div>
@@ -164,12 +176,15 @@
             <h3>Instructions:</h3>
             <ol>
                 <li><strong>Person A:</strong> Click "Start Call" to create an offer</li>
-                <li><strong>Person A:</strong> Copy the offer and send it to Person B via any messenger</li>
+                <li><strong>Person A:</strong> Copy the compressed offer and send it to Person B</li>
                 <li><strong>Person B:</strong> Click "Join Call", paste the offer, and click "Process Offer"</li>
-                <li><strong>Person B:</strong> Copy the answer and send it back to Person A</li>
+                <li><strong>Person B:</strong> Copy the compressed answer and send it back to Person A</li>
                 <li><strong>Person A:</strong> Paste the answer and click "Process Answer"</li>
                 <li>The video call should now be connected!</li>
             </ol>
+            <p style="margin-top: 10px; color: #666;">
+                💡 <strong>Tip:</strong> The offers and answers are compressed to ~10-20% of their original size!
+            </p>
         </div>
     </div>
 
@@ -191,6 +206,47 @@
         const localVideo = document.getElementById('localVideo');
         const remoteVideo = document.getElementById('remoteVideo');
         const status = document.getElementById('status');
+
+        // Compression functions
+        function compressData(data) {
+            try {
+                const jsonString = JSON.stringify(data);
+                const compressed = pako.deflate(jsonString, { level: 9 });
+                const base64 = btoa(String.fromCharCode.apply(null, compressed));
+                
+                // Show compression stats
+                const originalSize = jsonString.length;
+                const compressedSize = base64.length;
+                const ratio = ((compressedSize / originalSize) * 100).toFixed(1);
+                
+                return {
+                    data: base64,
+                    stats: {
+                        original: originalSize,
+                        compressed: compressedSize,
+                        ratio: ratio
+                    }
+                };
+            } catch (error) {
+                console.error('Compression error:', error);
+                throw error;
+            }
+        }
+
+        function decompressData(compressedData) {
+            try {
+                const binaryString = atob(compressedData);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                const decompressed = pako.inflate(bytes, { to: 'string' });
+                return JSON.parse(decompressed);
+            } catch (error) {
+                console.error('Decompression error:', error);
+                throw error;
+            }
+        }
 
         async function startCall() {
             try {
@@ -224,8 +280,11 @@
                 peerConnection.onicecandidate = event => {
                     if (event.candidate === null) {
                         // All ICE candidates have been gathered
-                        document.getElementById('localOffer').value = JSON.stringify(peerConnection.localDescription);
-                        updateStatus('Offer created! Copy and send it to the other person.', 'success');
+                        const compressed = compressData(peerConnection.localDescription);
+                        document.getElementById('localOffer').value = compressed.data;
+                        document.getElementById('offerCompressionInfo').textContent = 
+                            `Compressed from ${compressed.stats.original} to ${compressed.stats.compressed} characters (${compressed.stats.ratio}% of original)`;
+                        updateStatus('Offer created and compressed! Copy and send it to the other person.', 'success');
                     }
                 };
 
@@ -273,13 +332,14 @@
 
         async function handleOffer() {
             try {
-                const offerText = document.getElementById('remoteOffer').value;
+                const offerText = document.getElementById('remoteOffer').value.trim();
                 if (!offerText) {
                     updateStatus('Please paste the offer first', 'error');
                     return;
                 }
 
-                const offer = JSON.parse(offerText);
+                updateStatus('Decompressing offer...', 'info');
+                const offer = decompressData(offerText);
 
                 // Create peer connection
                 peerConnection = new RTCPeerConnection(configuration);
@@ -302,8 +362,11 @@
                 peerConnection.onicecandidate = event => {
                     if (event.candidate === null) {
                         // All ICE candidates have been gathered
-                        document.getElementById('localAnswer').value = JSON.stringify(peerConnection.localDescription);
-                        updateStatus('Answer created! Copy and send it back.', 'success');
+                        const compressed = compressData(peerConnection.localDescription);
+                        document.getElementById('localAnswer').value = compressed.data;
+                        document.getElementById('answerCompressionInfo').textContent = 
+                            `Compressed from ${compressed.stats.original} to ${compressed.stats.compressed} characters (${compressed.stats.ratio}% of original)`;
+                        updateStatus('Answer created and compressed! Copy and send it back.', 'success');
                     }
                 };
 
@@ -316,26 +379,27 @@
 
             } catch (error) {
                 console.error('Error handling offer:', error);
-                updateStatus('Error: ' + error.message, 'error');
+                updateStatus('Error: ' + error.message + ' (Make sure you pasted the complete offer)', 'error');
             }
         }
 
         async function handleAnswer() {
             try {
-                const answerText = document.getElementById('remoteAnswer').value;
+                const answerText = document.getElementById('remoteAnswer').value.trim();
                 if (!answerText) {
                     updateStatus('Please paste the answer first', 'error');
                     return;
                 }
 
-                const answer = JSON.parse(answerText);
+                updateStatus('Decompressing answer...', 'info');
+                const answer = decompressData(answerText);
                 await peerConnection.setRemoteDescription(answer);
 
                 updateStatus('Connected! You should see remote video soon.', 'success');
 
             } catch (error) {
                 console.error('Error handling answer:', error);
-                updateStatus('Error: ' + error.message, 'error');
+                updateStatus('Error: ' + error.message + ' (Make sure you pasted the complete answer)', 'error');
             }
         }
 
